@@ -54,6 +54,18 @@ python -m blindspot serve --config blindspot.yaml
 
 `python -m blindspot demo` writes a fictional offline case under `.blindspot-demo` so you can click through the viewer without sending traffic.
 
+## Web application
+
+`python -m blindspot app` opens http://127.0.0.1:8765/ on the machine where it is running. It works on Linux, macOS, and Windows. Create a project in the form, then run collection from that project's page.
+
+Each project is a folder under `.blindspot/projects/<name>/`. The case database stays there, and a finished run writes reusable files under `exports/`:
+
+- `case.json` and `events.jsonl`
+- `lanes/hosts.txt`, `lanes/endpoints.txt`, `lanes/parameters.txt`
+- `report.md` and `report.html`
+
+The project page reads that same case. A later run adds to it. Use `--port` if 8765 is already taken. The application listens on loopback only.
+
 ## Scope file
 
 Includes are OR. Excludes veto. `*.example.com` includes the apex and every subdomain. A URL prefix such as `https://api.example.com/v1` allows only that prefix, not the rest of the host and not another port. URL prefixes do not cause subdomain enumeration of the parent zone.

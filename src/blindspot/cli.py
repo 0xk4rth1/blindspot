@@ -13,6 +13,7 @@ from pathlib import Path
 
 from blindspot import __version__
 from blindspot.config import ConfigError, load_config, write_starter
+from blindspot.dashboard.product import serve_app
 from blindspot.dashboard.serve import serve
 from blindspot.dashboard.streamlit_app import app_path
 from blindspot.db import Database
@@ -72,6 +73,11 @@ def main(argv: list[str] | None = None) -> int:
     _config_arg(report_parser)
     report_parser.add_argument("--out", default="")
     report_parser.set_defaults(func=cmd_report)
+
+    app_parser = sub.add_parser("app", help="open the local web application")
+    app_parser.add_argument("--dir", default=".blindspot/projects")
+    app_parser.add_argument("--port", type=int, default=8765)
+    app_parser.set_defaults(func=cmd_app)
 
     serve_parser = sub.add_parser("serve", help="open the local case viewer")
     _config_arg(serve_parser)
@@ -190,6 +196,11 @@ def cmd_report(args: argparse.Namespace) -> int:
     config = _load(args.config)
     target = export_case(config, Path(args.out) if args.out else None)
     print(target)
+    return 0
+
+
+def cmd_app(args: argparse.Namespace) -> int:
+    serve_app(args.dir, args.port)
     return 0
 
 

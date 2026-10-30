@@ -45,12 +45,13 @@ def export_case(config: AppConfig, directory: Path | None = None) -> Path:
     try:
         engagement_id = db.ensure_engagement(config.engagement, config.program, config.authorization)
         payload = case_payload(db, engagement_id)
+        events = db.list_events(engagement_id, limit=2000)
     finally:
         db.close()
     target = directory or (config.report_dir() / config.engagement)
     target.mkdir(parents=True, exist_ok=True)
     (target / "case.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    _jsonl(target / "events.jsonl", payload["surface"])
+    _jsonl(target / "events.jsonl", events)
     lanes = target / "lanes"
     lanes.mkdir(exist_ok=True)
     _lines(lanes / "hosts.txt", [row["normalized"] for row in payload["assets"] if row["in_scope"]])

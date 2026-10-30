@@ -49,16 +49,25 @@ th { color: var(--muted); font-family: "Segoe UI", sans-serif; }
 .queue .card strong { font-size: 16px; }
 .queue ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
 .queue li { margin: 4px 0; }
+#runbar, #files { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+#runbar[hidden], #files[hidden] { display: none; }
+#files a, a.home { color: var(--accent); }
 </style>
 </head>
 <body>
 <header>
   <div>
     <div class="brand">Blind<span>spot</span></div>
+    <a id="home" class="home" href="/" hidden>All projects</a>
     <div id="case" class="muted"></div>
   </div>
   <div id="program" class="muted"></div>
 </header>
+<div id="runbar" class="toolbar" hidden>
+  <button type="button" id="run">Run collection</button>
+  <span id="runstate" class="muted"></span>
+</div>
+<div id="files" class="toolbar" hidden></div>
 <nav id="tabs">
   <button type="button" data-tab="overview" aria-pressed="true">Overview</button>
   <button type="button" data-tab="assets">Assets</button>
@@ -86,9 +95,14 @@ function matches(parts) {
 }
 
 async function load() {
-  data = embedded ? JSON.parse(embedded) : await fetch("/api/bootstrap").then((res) => res.json());
+  data = embedded ? JSON.parse(embedded) : await fetch("__API__/bootstrap").then((res) => res.json());
   document.getElementById("case").textContent = data.engagement.name;
   document.getElementById("program").textContent = data.engagement.program || "";
+  if (live && data.project) {
+    document.getElementById("home").hidden = false;
+    document.getElementById("runbar").hidden = false;
+    refreshRun();
+  }
   render();
 }
 
@@ -264,8 +278,48 @@ function grid(headers, rows) {
   return wrap;
 }
 
+async function refreshRun() {
+  let status;
+  try {
+    status = await fetch("__API__/run").then((res) => res.json());
+  } catch (error) {
+    document.getElementById("runstate").textContent = "could not read run status";
+    return;
+  }
+  const label = document.getElementById("runstate");
+  label.textContent = status.state === "failed" ? status.state + ": " + (status.error || "") : status.state;
+  const files = document.getElementById("files");
+  files.hidden = false;
+  files.replaceChildren();
+  for (const name of status.files || []) {
+    const link = document.createElement("a");
+    link.href = "__API__/files/" + encodeURIComponent(name);
+    link.textContent = name;
+    files.append(link);
+  }
+  if (status.state === "running") {
+    window.setTimeout(refreshRun, 2000);
+    return;
+  }
+  if (status.state === "completed") {
+    data = await fetch("__API__/bootstrap").then((res) => res.json());
+    render();
+  }
+}
+
+document.getElementById("run").addEventListener("click", async () => {
+  document.getElementById("runstate").textContent = "starting";
+  const response = await fetch("__API__/run", {method: "POST"});
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    document.getElementById("runstate").textContent = body.error || "run failed";
+    return;
+  }
+  refreshRun();
+});
+
 async function setStatus(id, status) {
-  const response = await fetch("/api/hypotheses/" + id, {
+  const response = await fetch("__API__/hypotheses/" + id, {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({status})
@@ -294,10 +348,18 @@ load();
 """
 
 
-def render_page(bootstrap: str = "") -> str:
+def render_page(bootstrap: str = "", api: str = "/api") -> str:
     if "</" in bootstrap.lower():
         raise ValueError("bootstrap payload is not safe to embed")
-    return PAGE.replace("__BOOTSTRAP__", bootstrap)
+    if not _safe_api(api):
+        raise ValueError("api prefix is not safe to embed")
+    return PAGE.replace("__BOOTSTRAP__", bootstrap).replace("__API__", api)
+
+
+def _safe_api(api: str) -> bool:
+    import re
+
+    return bool(re.fullmatch(r"/api(/projects/[a-z0-9][a-z0-9-]{0,40})?", api))
 
 
 def page_path() -> Path:
