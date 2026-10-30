@@ -36,6 +36,47 @@ def case_payload(db: Database, engagement_id: int) -> dict:
     }
 
 
+def discovery_payload(db: Database, engagement_id: int) -> dict:
+    """Hosts and counts for the project page. Small enough to read while discovery is writing."""
+
+    engagement = db.engagement_row(engagement_id)
+    summary = db.summary(engagement_id)
+    hosts = db.live_hosts(engagement_id, limit=400)
+    return {
+        "engagement": {
+            "id": engagement["id"],
+            "name": engagement["name"],
+            "program": engagement["program"],
+            "authorization": engagement["authorization"],
+            "created_at": engagement["created_at"],
+        },
+        "summary": summary,
+        "assets": [
+            {
+                "asset_type": "host",
+                "normalized": host,
+                "in_scope": 1,
+                "active": 1,
+                "sources": "",
+                "first_seen": "",
+                "last_seen": "",
+            }
+            for host in hosts
+        ],
+        "assets_truncated": int(summary.get("live_hosts") or 0) > len(hosts),
+        "endpoints": [],
+        "parameters": [],
+        "relationships": [],
+        "technologies": [],
+        "surface": [],
+        "changes": [],
+        "hypotheses": [],
+        "jobs": [],
+        "logs": [],
+        "busy": False,
+    }
+
+
 def safe_json(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=True).replace("<", "\\u003c")
 
@@ -75,6 +116,26 @@ def export_case(config: AppConfig, directory: Path | None = None, *, create: boo
 
     (target / "report.html").write_text(render_page(safe_json(payload)), encoding="utf-8")
     return target
+
+
+def export_hosts(config: AppConfig) -> None:
+    """Rewrite hosts.txt during discovery without building the full report."""
+
+    import sqlite3
+
+    db = Database(config.database_path(), readonly=True, timeout=2)
+    try:
+        engagement_id = db.find_engagement(config.engagement)
+        if engagement_id is None:
+            return
+        hosts = db.live_hosts(engagement_id)
+    except sqlite3.OperationalError:
+        return
+    finally:
+        db.close()
+    lanes = config.report_dir() / "lanes"
+    lanes.mkdir(parents=True, exist_ok=True)
+    _lines(lanes / "hosts.txt", hosts)
 
 
 def _jsonl(path: Path, rows: list[dict]) -> None:

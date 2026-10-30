@@ -225,19 +225,21 @@ def utcnow() -> str:
 
 
 class Database:
-    def __init__(self, path: Path, *, readonly: bool = False):
+    def __init__(self, path: Path, *, readonly: bool = False, timeout: float = 30):
         self.path = Path(path)
         self._lock = threading.Lock()
+        busy = str(int(timeout * 1000))
         if readonly:
             uri = self.path.resolve().as_uri() + "?mode=ro"
-            self._conn = sqlite3.connect(uri, uri=True, timeout=30, check_same_thread=False)
+            self._conn = sqlite3.connect(uri, uri=True, timeout=timeout, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA busy_timeout=30000")
+            self._conn.execute(f"PRAGMA busy_timeout={busy}")
+            self._conn.execute("PRAGMA query_only=ON")
             return
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
+        self._conn = sqlite3.connect(self.path, timeout=timeout, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._conn.execute("PRAGMA busy_timeout=30000")
+        self._conn.execute(f"PRAGMA busy_timeout={busy}")
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(SCHEMA)
         self._migrate()
@@ -254,6 +256,7 @@ class Database:
         for name, declaration in additions.items():
             if name not in columns:
                 self._conn.execute(f"ALTER TABLE hypotheses ADD COLUMN {name} {declaration}")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_job_logs_job ON job_logs(job_id, id)")
 
     def close(self) -> None:
         with self._lock:
@@ -914,19 +917,21 @@ class Database:
             self._conn.commit()
         return len(unique)
 
-    def live_hosts(self, engagement_id: int) -> list[str]:
+    def live_hosts(self, engagement_id: int, limit: int | None = None) -> list[str]:
         """In-scope hosts that have not been set aside by a finished HTTP probe."""
 
+        sql = """
+            SELECT normalized FROM assets
+            WHERE engagement_id = ? AND in_scope = 1 AND active = 1
+              AND asset_type IN ('domain', 'host', 'ip')
+            ORDER BY normalized
+        """
+        params: list[object] = [engagement_id]
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
         with self._lock:
-            rows = self._conn.execute(
-                """
-                SELECT normalized FROM assets
-                WHERE engagement_id = ? AND in_scope = 1 AND active = 1
-                  AND asset_type IN ('domain', 'host', 'ip')
-                ORDER BY normalized
-                """,
-                (engagement_id,),
-            ).fetchall()
+            rows = self._conn.execute(sql, tuple(params)).fetchall()
             self._conn.rollback()
         return [row["normalized"] for row in rows]
 

@@ -64,7 +64,7 @@ Each project is a folder under `.blindspot/projects/<name>/`. The case database 
 - `lanes/hosts.txt`, `lanes/endpoints.txt`, `lanes/parameters.txt`
 - `report.md` and `report.html`
 
-The project page reads that same case. Discover hosts is the first step: passive names, DNS, then an HTTP probe. `hosts.txt` lists the hosts that answered. A host that does not answer a finished probe is left out of that file. Crawl, historical URLs, and review prompts are not part of this step. Use `--port` if 8765 is already taken. The application listens on loopback only.
+The project page reads that same case. Discover hosts is the first step: passive names, DNS, then an HTTP probe. The page shows those steps while the run is going, and a refresh keeps the hosts already stored. `hosts.txt` lists the hosts that answered. A host that does not answer a finished probe is left out of that file. Crawl, historical URLs, and review prompts are not part of this step. Use `--port` if 8765 is already taken. The application listens on loopback only.
 
 ## Scope file
 

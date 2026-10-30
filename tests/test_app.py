@@ -12,7 +12,7 @@ from tempfile import TemporaryDirectory
 from blindspot.adapters.external import default_tool_runner
 from blindspot.config import ConfigError
 from blindspot.dashboard.page import render_page
-from blindspot.dashboard.product import AppServer, active_stage, explain_warning
+from blindspot.dashboard.product import AppServer, active_stage, discovery_steps, explain_warning
 from blindspot.db import Database
 from blindspot.orchestrator import host_discovery_stages
 from blindspot.projects import create_project
@@ -56,7 +56,22 @@ class ProjectTests(unittest.TestCase):
         )
         page = render_page("", api="/api/projects/nasa")
         self.assertIn("Discover hosts", page)
+        self.assertIn('id="steps"', page)
         self.assertNotIn("wayback", host_discovery_stages())
+        steps = discovery_steps(
+            [
+                "stage start subfinder",
+                "stage done subfinder inserted=3",
+                "stage start ct_logs",
+            ]
+        )
+        by_name = {step["name"]: step["status"] for step in steps}
+        self.assertEqual(by_name["subfinder"], "done")
+        self.assertEqual(by_name["amass"], "pending")
+        self.assertEqual(by_name["ct_logs"], "running")
+        self.assertEqual(by_name["dns_resolve"], "pending")
+        self.assertEqual(by_name["http_probe"], "pending")
+        self.assertEqual([step["label"] for step in steps], ["Subfinder", "Amass", "Certificates", "DNS", "HTTP probe"])
 
     def test_hosts_that_do_not_answer_leave_the_working_list(self) -> None:
         self.assertEqual(

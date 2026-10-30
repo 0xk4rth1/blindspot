@@ -16,7 +16,7 @@ from blindspot.dashboard.page import render_page
 from blindspot.db import Database
 from blindspot.orchestrator import execute, host_discovery_stages
 from blindspot.projects import available_exports, create_project, describe, export_file, list_projects, project_dir
-from blindspot.report.export import case_payload, export_case, safe_json
+from blindspot.report.export import discovery_payload, export_case, safe_json
 
 _RUNS: dict[str, dict] = {}
 _RUN_LOCK = threading.Lock()
@@ -210,13 +210,14 @@ def _bootstrap(folder: Path, slug: str) -> dict:
     payload = _empty_payload(config)
     database = config.database_path()
     if database.is_file():
-        db = Database(database, readonly=True)
+        db = Database(database, readonly=True, timeout=2)
         try:
             engagement_id = db.find_engagement(config.engagement)
             if engagement_id is not None:
-                payload = case_payload(db, engagement_id)
+                payload = discovery_payload(db, engagement_id)
         except sqlite3.OperationalError:
             payload = _empty_payload(config)
+            payload["busy"] = True
         finally:
             db.close()
     payload["project"] = {"slug": slug, "files": available_exports(folder)}
@@ -243,6 +244,8 @@ def _empty_payload(config) -> dict:
         "hypotheses": [],
         "jobs": [],
         "logs": [],
+        "busy": False,
+        "assets_truncated": False,
     }
 
 
@@ -250,39 +253,78 @@ def _status(folder: Path, slug: str) -> dict:
     with _RUN_LOCK:
         state = dict(_RUNS.get(slug) or {"state": "idle", "error": ""})
     state["files"] = available_exports(folder)
-    stage, warning = job_progress(folder)
-    state["stage"] = stage if state["state"] == "running" else ""
+    steps, warning = job_progress(folder)
+    state["steps"] = steps
+    running = next((step["name"] for step in steps if step["status"] == "running"), "")
+    state["stage"] = running if state["state"] == "running" else ""
     state["warning"] = warning if state["state"] in {"running", "failed"} else ""
     return state
 
 
-def job_progress(folder: Path) -> tuple[str, str]:
-    """Return the open stage and the latest warning for the newest job."""
+def discovery_steps(messages: list[str]) -> list[dict]:
+    """Ordered host-discovery steps and whether each is pending, running, done, or failed."""
+
+    labels = {
+        "subfinder": "Subfinder",
+        "amass": "Amass",
+        "ct_logs": "Certificates",
+        "dns_resolve": "DNS",
+        "http_probe": "HTTP probe",
+    }
+    status = {name: "pending" for name in host_discovery_stages()}
+    for message in messages:
+        name = ""
+        mark = ""
+        if message.startswith("stage start "):
+            name = message.removeprefix("stage start ").split(" ", 1)[0]
+            mark = "running"
+        elif message.startswith("stage done "):
+            name = message.removeprefix("stage done ").split(" ", 1)[0]
+            mark = "done"
+        elif message.startswith("stage ") and " failed:" in message:
+            name = message.removeprefix("stage ").split(" failed:", 1)[0].strip()
+            mark = "failed"
+        if name in status and mark:
+            status[name] = mark
+    return [{"name": name, "label": labels[name], "status": status[name]} for name in host_discovery_stages()]
+
+
+def job_progress(folder: Path) -> tuple[list[dict], str]:
+    """Return discovery steps and the latest warning for the newest job."""
 
     database = folder / "case.sqlite"
     if not database.is_file():
-        return "", ""
+        return discovery_steps([]), ""
     try:
-        connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+        connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=2)
         try:
+            connection.execute("PRAGMA busy_timeout=2000")
+            job = connection.execute("SELECT id FROM jobs ORDER BY id DESC LIMIT 1").fetchone()
+            if not job:
+                return discovery_steps([]), ""
             rows = connection.execute(
                 """
-                SELECT level, message FROM job_logs
-                WHERE job_id = (SELECT id FROM jobs ORDER BY id DESC LIMIT 1)
+                SELECT message FROM job_logs
+                WHERE job_id = ? AND message LIKE 'stage %'
                 ORDER BY id
-                """
+                """,
+                (job[0],),
             ).fetchall()
+            warning_row = connection.execute(
+                """
+                SELECT message FROM job_logs
+                WHERE job_id = ? AND level IN ('warning', 'error')
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (job[0],),
+            ).fetchone()
         finally:
             connection.close()
     except sqlite3.Error:
-        return "", ""
-    messages = [row[1] for row in rows]
-    warning = ""
-    for level, message in reversed(rows):
-        if level in {"warning", "error"}:
-            warning = explain_warning(message)
-            break
-    return active_stage(messages), warning
+        return discovery_steps([]), ""
+    warning = explain_warning(warning_row[0]) if warning_row else ""
+    return discovery_steps([row[0] for row in rows]), warning
 
 
 def explain_warning(message: str) -> str:

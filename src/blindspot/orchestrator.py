@@ -174,7 +174,7 @@ async def execute(
             _publish(config)
         _notify(db, config, engagement_id, job_id)
         db.finish_job(job_id, "completed", stats={"stages": results, "dropped": intake.dropped})
-        _publish(config)
+        _publish(config, full=True)
         summary = db.summary(engagement_id)
         summary["job_id"] = job_id
         summary["stages"] = results
@@ -183,11 +183,14 @@ async def execute(
         db.close()
 
 
-def _publish(config: AppConfig) -> None:
+def _publish(config: AppConfig, *, full: bool = False) -> None:
     try:
-        from blindspot.report.export import export_case
+        from blindspot.report.export import export_case, export_hosts
 
-        export_case(config, config.report_dir(), create=False)
+        if full:
+            export_case(config, config.report_dir(), create=False)
+        else:
+            export_hosts(config)
     except Exception as exc:
         logger.warning("could not refresh export files: %s", exc)
 

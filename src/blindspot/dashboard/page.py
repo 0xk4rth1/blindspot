@@ -49,9 +49,13 @@ th { color: var(--muted); font-family: "Segoe UI", sans-serif; }
 .queue .card strong { font-size: 16px; }
 .queue ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
 .queue li { margin: 4px 0; }
-#runbar, #files { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-#runbar[hidden], #files[hidden] { display: none; }
+#runbar, #files, #steps { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+#runbar[hidden], #files[hidden], #steps[hidden] { display: none; }
 #files a, a.home { color: var(--accent); }
+.step { border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; color: var(--muted); }
+.step.running { border-color: var(--accent); color: var(--accent); }
+.step.done { border-color: var(--ok); color: var(--ok); }
+.step.failed { border-color: var(--bad); color: var(--bad); }
 </style>
 </head>
 <body>
@@ -68,6 +72,7 @@ th { color: var(--muted); font-family: "Segoe UI", sans-serif; }
   <span id="runstate" class="muted"></span>
   <span id="runnote" class="muted"></span>
 </div>
+<div id="steps" class="toolbar" hidden></div>
 <div id="files" class="toolbar" hidden></div>
 <nav id="tabs">
   <button type="button" data-tab="overview" aria-pressed="true">Overview</button>
@@ -96,14 +101,17 @@ function matches(parts) {
 }
 
 async function load() {
-  data = embedded ? JSON.parse(embedded) : await fetch("__API__/bootstrap").then((res) => res.json());
-  document.getElementById("case").textContent = data.engagement.name;
-  document.getElementById("program").textContent = data.engagement.program || "";
-  if (live && data.project) {
+  if (live) {
     document.getElementById("home").hidden = false;
     document.getElementById("runbar").hidden = false;
-    refreshRun();
+    document.getElementById("steps").hidden = false;
+    document.getElementById("view").textContent = "Reading hosts found so far…";
+    await refreshRun();
+    return;
   }
+  data = JSON.parse(embedded);
+  document.getElementById("case").textContent = data.engagement.name;
+  document.getElementById("program").textContent = data.engagement.program || "";
   render();
 }
 
@@ -136,6 +144,9 @@ function overview() {
   const note = document.createElement("p");
   note.className = "note";
   note.textContent = "This step finds in-scope hosts. hosts.txt keeps the ones that answered HTTP. " + data.engagement.authorization;
+  if (data.assets_truncated) {
+    note.textContent = "Showing the first 400 live hosts. hosts.txt has the full list. " + note.textContent;
+  }
   wrap.append(cards, note);
   return wrap;
 }
@@ -279,6 +290,17 @@ function grid(headers, rows) {
   return wrap;
 }
 
+function paintSteps(steps) {
+  const bar = document.getElementById("steps");
+  bar.replaceChildren();
+  for (const step of steps || []) {
+    const item = document.createElement("span");
+    item.className = "step " + step.status;
+    item.textContent = step.label;
+    bar.append(item);
+  }
+}
+
 async function refreshRun() {
   let status;
   try {
@@ -287,13 +309,18 @@ async function refreshRun() {
     document.getElementById("runstate").textContent = "could not read run status";
     return;
   }
+  paintSteps(status.steps);
+  const steps = status.steps || [];
+  const current = steps.find((step) => step.status === "running");
   const label = document.getElementById("runstate");
   if (status.state === "failed") {
     label.textContent = "failed: " + (status.error || "");
-  } else if (status.state === "running" && status.stage) {
-    label.textContent = "running · " + status.stage;
+  } else if (status.state === "running") {
+    label.textContent = current ? "Running " + current.label : "Running host discovery";
+  } else if (steps.some((step) => step.status === "done" || step.status === "failed")) {
+    label.textContent = "Host discovery finished";
   } else {
-    label.textContent = status.state;
+    label.textContent = "Ready";
   }
   document.getElementById("runnote").textContent = status.warning || "";
   const files = document.getElementById("files");
@@ -305,12 +332,21 @@ async function refreshRun() {
     link.textContent = name;
     files.append(link);
   }
-  if (status.state === "running" || status.state === "completed") {
+  if (!data || data.busy || status.state === "running" || status.state === "completed") {
     try {
-      data = await fetch("__API__/bootstrap").then((res) => res.json());
-      render();
+      const next = await fetch("__API__/bootstrap").then((res) => res.json());
+      if (!next.busy) {
+        data = next;
+        document.getElementById("case").textContent = data.engagement.name;
+        document.getElementById("program").textContent = data.engagement.program || "";
+        render();
+      } else if (!data || data.busy) {
+        document.getElementById("view").textContent = "Host discovery is still writing. Names already stored will show on the next check.";
+      }
     } catch (error) {
-      // The case is busy. The next poll tries again.
+      if (!data) {
+        document.getElementById("view").textContent = "Hosts could not be read yet. This page will try again.";
+      }
     }
   }
   if (status.state === "running") {
