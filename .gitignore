@@ -2,6 +2,8 @@
 .blindspot-demo/
 .reconmind/
 .reconmind-demo/
+.reconmind/
+.reconmind-demo/
 .venv/
 __pycache__/
 *.py[cod]
