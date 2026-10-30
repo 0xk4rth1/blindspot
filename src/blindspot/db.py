@@ -893,6 +893,41 @@ class Database:
                 """,
                 (engagement_id,),
             ).fetchall()
+            self._conn.rollback()
+        return [row["normalized"] for row in rows]
+
+    def mark_hosts_inactive(self, engagement_id: int, hosts: list[str]) -> int:
+        """Set aside hosts that were probed and did not answer. The rows stay in the case."""
+
+        unique = list(dict.fromkeys(host for host in hosts if host))
+        if not unique:
+            return 0
+        with self._lock:
+            self._conn.executemany(
+                """
+                UPDATE assets SET active = 0
+                WHERE engagement_id = ? AND normalized = ?
+                  AND asset_type IN ('domain', 'host', 'ip')
+                """,
+                [(engagement_id, host) for host in unique],
+            )
+            self._conn.commit()
+        return len(unique)
+
+    def live_hosts(self, engagement_id: int) -> list[str]:
+        """In-scope hosts that have not been set aside by a finished HTTP probe."""
+
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT normalized FROM assets
+                WHERE engagement_id = ? AND in_scope = 1 AND active = 1
+                  AND asset_type IN ('domain', 'host', 'ip')
+                ORDER BY normalized
+                """,
+                (engagement_id,),
+            ).fetchall()
+            self._conn.rollback()
         return [row["normalized"] for row in rows]
 
     def detect_changes(self, engagement_id: int, job_id: int, stages_ran: set[str]) -> int:
@@ -1109,6 +1144,12 @@ class Database:
             "assets": count("SELECT COUNT(*) AS n FROM assets WHERE engagement_id = ?"),
             "in_scope_hosts": count(
                 "SELECT COUNT(*) AS n FROM assets WHERE engagement_id = ? AND in_scope = 1 AND asset_type IN ('domain','host','ip')"
+            ),
+            "live_hosts": count(
+                "SELECT COUNT(*) AS n FROM assets WHERE engagement_id = ? AND in_scope = 1 AND active = 1 AND asset_type IN ('domain','host','ip')"
+            ),
+            "inactive_hosts": count(
+                "SELECT COUNT(*) AS n FROM assets WHERE engagement_id = ? AND in_scope = 1 AND active = 0 AND asset_type IN ('domain','host','ip')"
             ),
             "surface_urls": count("SELECT COUNT(*) AS n FROM surface_urls WHERE engagement_id = ?"),
             "endpoints": count("SELECT COUNT(*) AS n FROM endpoints WHERE engagement_id = ?"),

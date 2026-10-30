@@ -52,6 +52,7 @@ def export_case(config: AppConfig, directory: Path | None = None, *, create: boo
             return directory or config.report_dir()
         payload = case_payload(db, engagement_id)
         events = db.list_events(engagement_id, limit=2000)
+        hosts = db.live_hosts(engagement_id)
     finally:
         db.close()
     target = directory or (config.report_dir() / config.engagement)
@@ -60,7 +61,7 @@ def export_case(config: AppConfig, directory: Path | None = None, *, create: boo
     _jsonl(target / "events.jsonl", events)
     lanes = target / "lanes"
     lanes.mkdir(exist_ok=True)
-    _lines(lanes / "hosts.txt", [row["normalized"] for row in payload["assets"] if row["in_scope"]])
+    _lines(lanes / "hosts.txt", hosts)
     _lines(
         lanes / "endpoints.txt",
         [f"{row['method']} {row['host']}{row['templated_path']}" for row in payload["endpoints"]],

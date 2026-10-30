@@ -14,7 +14,7 @@ from urllib.parse import unquote, urlsplit
 from blindspot.config import ConfigError, load_config
 from blindspot.dashboard.page import render_page
 from blindspot.db import Database
-from blindspot.orchestrator import execute
+from blindspot.orchestrator import execute, host_discovery_stages
 from blindspot.projects import available_exports, create_project, describe, export_file, list_projects, project_dir
 from blindspot.report.export import case_payload, export_case, safe_json
 
@@ -262,8 +262,6 @@ def job_progress(folder: Path) -> tuple[str, str]:
     database = folder / "case.sqlite"
     if not database.is_file():
         return "", ""
-    import sqlite3
-
     try:
         connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
         try:
@@ -318,7 +316,7 @@ def _start(root: Path, slug: str) -> None:
 def _execute(folder: Path, slug: str) -> None:
     try:
         config = load_config(folder / "blindspot.yaml")
-        summary = asyncio.run(execute(config))
+        summary = asyncio.run(execute(config, only=host_discovery_stages()))
         export_case(config, config.report_dir())
         with _RUN_LOCK:
             _RUNS[slug] = {

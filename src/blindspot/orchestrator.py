@@ -81,6 +81,12 @@ def stage_names() -> list[str]:
     return [stage.name for stage in STAGE_ORDER]
 
 
+def host_discovery_stages() -> list[str]:
+    """The first step: in-scope names, then the hosts that answer HTTP."""
+
+    return ["subfinder", "amass", "ct_logs", "dns_resolve", "http_probe"]
+
+
 async def execute(
     config: AppConfig,
     *,

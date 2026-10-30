@@ -64,7 +64,7 @@ th { color: var(--muted); font-family: "Segoe UI", sans-serif; }
   <div id="program" class="muted"></div>
 </header>
 <div id="runbar" class="toolbar" hidden>
-  <button type="button" id="run">Run collection</button>
+  <button type="button" id="run">Discover hosts</button>
   <span id="runstate" class="muted"></span>
   <span id="runnote" class="muted"></span>
 </div>
@@ -135,13 +135,13 @@ function overview() {
   }
   const note = document.createElement("p");
   note.className = "note";
-  note.textContent = "Every host and URL in this case was checked against the engagement scope. Review prompts in the queue are leads for manual testing, not confirmed findings. " + data.engagement.authorization;
+  note.textContent = "This step finds in-scope hosts. hosts.txt keeps the ones that answered HTTP. " + data.engagement.authorization;
   wrap.append(cards, note);
   return wrap;
 }
 
 function tableView() {
-  const rows = data.assets.filter((row) => matches([row.asset_type, row.normalized, row.sources, row.in_scope]));
+  const rows = data.assets.filter((row) => row.active !== 0 && row.asset_type !== "external_name" && matches([row.asset_type, row.normalized, row.sources, row.in_scope]));
   return grid(["Type", "Value", "In scope", "Sources", "First seen", "Last seen"], rows.map((row) => [
     row.asset_type, row.normalized, row.in_scope ? "yes" : "no", row.sources || "", row.first_seen, row.last_seen
   ]));

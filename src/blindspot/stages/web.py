@@ -32,17 +32,29 @@ class HttpProbeStage:
         if not ctx.config.network.enabled:
             return StageResult(self.name, note="network disabled")
         binary = tool_path(ctx.config.tools.httpx)
-        urls = _probe_urls(ctx)
+        # httpx is built for a large host list. The built-in client stays capped.
+        urls = _probe_urls(ctx, cap=None if binary else ctx.config.limits.max_urls)
+        responded: set[str] = set()
         if binary:
-            inserted = await self._httpx(ctx, binary, urls)
+            inserted, responded, finished = await self._httpx(ctx, binary, urls)
             note = "httpx"
         else:
             ctx.log.info("httpx not on PATH; probing with the built-in client")
             inserted = 0
+            finished = True
             for url in urls:
                 count, _links = await record_response(ctx, url, self.name)
                 inserted += count
+                if count:
+                    host = host_from_url(url)
+                    if host:
+                        responded.add(host)
             note = "builtin"
+        if finished:
+            retired = ctx.db.mark_hosts_inactive(ctx.engagement_id, hosts_without_response(urls, responded))
+            note = f"{note}; {retired} hosts did not answer and were set aside"
+        else:
+            note = f"{note}; probe did not finish, so unanswered hosts were kept"
         for origin in _seed_origins(ctx):
             for path in DOCUMENTS:
                 document = join_origin(origin, path)
@@ -50,8 +62,9 @@ class HttpProbeStage:
                     await self._document(ctx, document)
         return StageResult(self.name, inserted=inserted, note=note)
 
-    async def _httpx(self, ctx, binary: str, urls: list[str]) -> int:
-        args = ["-silent", "-json", "-status-code", "-title", "-no-color", *extra_args(ctx.config.tools.httpx)]
+    async def _httpx(self, ctx, binary: str, urls: list[str]) -> tuple[int, set[str], bool]:
+        # A short per-host timeout lets a dead name fail fast so the list can finish.
+        args = ["-silent", "-json", "-status-code", "-title", "-no-color", "-timeout", "3", *extra_args(ctx.config.tools.httpx)]
         code, stdout, stderr = await ctx.tool_runner(
             binary,
             args,
@@ -63,13 +76,22 @@ class HttpProbeStage:
         if code not in {0, 124} and not stdout.strip():
             ctx.log.warning(f"httpx exited {code}; falling back to the built-in client")
             inserted = 0
+            responded: set[str] = set()
             for url in urls:
                 count, _links = await record_response(ctx, url, self.name)
                 inserted += count
-            return inserted
+                if count:
+                    host = host_from_url(url)
+                    if host:
+                        responded.add(host)
+            return inserted, responded, True
         inserted = 0
+        responded = set()
         for row in parse_httpx(stdout):
             url = str(row.get("url") or "")
+            probed = host_from_url(str(row.get("input") or "")) or host_from_url(url)
+            if probed:
+                responded.add(probed)
             if not url or not ctx.scope.allows_url(url):
                 ctx.intake.dropped += 1
                 continue
@@ -105,7 +127,7 @@ class HttpProbeStage:
                     evidence="httpx",
                 )
             inserted += 1
-        return inserted
+        return inserted, responded, code == 0
 
     async def _document(self, ctx, url: str) -> None:
         try:
@@ -454,7 +476,19 @@ def _rows(text: str, wayback: bool) -> list[dict]:
     return rows
 
 
-def _probe_urls(ctx) -> list[str]:
+def hosts_without_response(urls: list[str], responded: set[str]) -> list[str]:
+    missing: list[str] = []
+    seen: set[str] = set()
+    for url in urls:
+        host = host_from_url(url)
+        if not host or host in responded or host in seen:
+            continue
+        seen.add(host)
+        missing.append(host)
+    return missing
+
+
+def _probe_urls(ctx, cap: int | None) -> list[str]:
     urls: list[str] = []
     seen: set[str] = set()
     for url in ctx.scope.seed_urls(ctx.config.seeds):
@@ -467,7 +501,7 @@ def _probe_urls(ctx) -> list[str]:
             continue
         seen.add(candidate)
         urls.append(candidate)
-        if len(urls) >= ctx.config.limits.max_urls:
+        if cap is not None and len(urls) >= cap:
             break
     return urls
 

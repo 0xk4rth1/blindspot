@@ -11,9 +11,12 @@ from tempfile import TemporaryDirectory
 
 from blindspot.adapters.external import default_tool_runner
 from blindspot.config import ConfigError
+from blindspot.dashboard.page import render_page
 from blindspot.dashboard.product import AppServer, active_stage, explain_warning
 from blindspot.db import Database
+from blindspot.orchestrator import host_discovery_stages
 from blindspot.projects import create_project
+from blindspot.stages.web import hosts_without_response
 
 
 class ProjectTests(unittest.TestCase):
@@ -45,6 +48,47 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(code, 124)
         self.assertIn("kept.host", stdout)
         self.assertIn("timed out", stderr)
+
+    def test_the_project_run_is_host_discovery(self) -> None:
+        self.assertEqual(
+            host_discovery_stages(),
+            ["subfinder", "amass", "ct_logs", "dns_resolve", "http_probe"],
+        )
+        page = render_page("", api="/api/projects/nasa")
+        self.assertIn("Discover hosts", page)
+        self.assertNotIn("wayback", host_discovery_stages())
+
+    def test_hosts_that_do_not_answer_leave_the_working_list(self) -> None:
+        self.assertEqual(
+            hosts_without_response(
+                ["https://live.northwind.test/", "https://dead.northwind.test/"],
+                {"live.northwind.test"},
+            ),
+            ["dead.northwind.test"],
+        )
+        with TemporaryDirectory() as tmp:
+            db = Database(Path(tmp) / "case.sqlite")
+            try:
+                engagement = db.ensure_engagement("Northwind", "program", "Authorized fictional engagement")
+                for name in ("live.northwind.test", "dead.northwind.test"):
+                    db.upsert_asset(
+                        engagement,
+                        "host",
+                        name,
+                        in_scope=True,
+                        source="subfinder",
+                        confidence=0.6,
+                        job_id=None,
+                    )
+                retired = db.mark_hosts_inactive(engagement, ["dead.northwind.test"])
+                self.assertEqual(retired, 1)
+                self.assertEqual(db.in_scope_hosts(engagement), ["dead.northwind.test", "live.northwind.test"])
+                self.assertEqual(db.live_hosts(engagement), ["live.northwind.test"])
+                summary = db.summary(engagement)
+                self.assertEqual(summary["live_hosts"], 1)
+                self.assertEqual(summary["inactive_hosts"], 1)
+            finally:
+                db.close()
 
     def test_a_read_during_a_write_does_not_lock_the_case(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -109,7 +153,7 @@ class ProjectTests(unittest.TestCase):
                 )
                 self.assertEqual(created["slug"], "northwind")
                 page = urllib.request.urlopen(base + "/projects/northwind").read().decode()
-                self.assertIn("Run collection", page)
+                self.assertIn("Discover hosts", page)
                 self.assertIn("/api/projects/northwind", page)
                 _post(base + "/api/projects/northwind/run", {})
                 status = {}
