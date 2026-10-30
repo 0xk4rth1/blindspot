@@ -143,7 +143,7 @@ function overview() {
   }
   const note = document.createElement("p");
   note.className = "note";
-  note.textContent = "This step finds in-scope hosts. hosts.txt keeps the ones that answered HTTP. " + data.engagement.authorization;
+  note.textContent = "in_scope_hosts are names found so far. live_hosts are only the ones that returned an HTTP response, which happens in HTTP probe. " + data.engagement.authorization;
   if (data.assets_truncated) {
     note.textContent = "Showing the first 400 live hosts. hosts.txt has the full list. " + note.textContent;
   }

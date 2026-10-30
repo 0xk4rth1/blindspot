@@ -220,6 +220,27 @@ CREATE INDEX IF NOT EXISTS idx_request_log_job ON request_log(job_id, decision);
 """
 
 
+# A stored http_snapshot is the proof that the host answered. active = 1 keeps a
+# later finished probe from leaving a host in the list after it stopped answering.
+_LIVE_HOST = """
+a.engagement_id = ? AND a.in_scope = 1 AND a.active = 1
+  AND a.asset_type IN ('domain', 'host', 'ip')
+  AND EXISTS (
+    SELECT 1 FROM events e
+    WHERE e.engagement_id = a.engagement_id
+      AND e.kind = 'http_snapshot'
+      AND (
+        e.subject = 'https://' || a.normalized
+        OR e.subject = 'http://' || a.normalized
+        OR e.subject LIKE 'https://' || a.normalized || '/%'
+        OR e.subject LIKE 'http://' || a.normalized || '/%'
+        OR e.subject LIKE 'https://' || a.normalized || ':%'
+        OR e.subject LIKE 'http://' || a.normalized || ':%'
+      )
+  )
+"""
+
+
 def utcnow() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -257,6 +278,7 @@ class Database:
             if name not in columns:
                 self._conn.execute(f"ALTER TABLE hypotheses ADD COLUMN {name} {declaration}")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_job_logs_job ON job_logs(job_id, id)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_events_kind ON events(engagement_id, kind)")
 
     def close(self) -> None:
         with self._lock:
@@ -918,13 +940,12 @@ class Database:
         return len(unique)
 
     def live_hosts(self, engagement_id: int, limit: int | None = None) -> list[str]:
-        """In-scope hosts that have not been set aside by a finished HTTP probe."""
+        """In-scope hosts with a stored HTTP response that have not been set aside."""
 
-        sql = """
-            SELECT normalized FROM assets
-            WHERE engagement_id = ? AND in_scope = 1 AND active = 1
-              AND asset_type IN ('domain', 'host', 'ip')
-            ORDER BY normalized
+        sql = f"""
+            SELECT a.normalized FROM assets a
+            WHERE {_LIVE_HOST}
+            ORDER BY a.normalized
         """
         params: list[object] = [engagement_id]
         if limit is not None:
@@ -1151,7 +1172,7 @@ class Database:
                 "SELECT COUNT(*) AS n FROM assets WHERE engagement_id = ? AND in_scope = 1 AND asset_type IN ('domain','host','ip')"
             ),
             "live_hosts": count(
-                "SELECT COUNT(*) AS n FROM assets WHERE engagement_id = ? AND in_scope = 1 AND active = 1 AND asset_type IN ('domain','host','ip')"
+                f"SELECT COUNT(*) AS n FROM assets a WHERE {_LIVE_HOST}"
             ),
             "inactive_hosts": count(
                 "SELECT COUNT(*) AS n FROM assets WHERE engagement_id = ? AND in_scope = 1 AND active = 0 AND asset_type IN ('domain','host','ip')"

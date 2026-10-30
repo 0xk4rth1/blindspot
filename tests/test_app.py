@@ -95,6 +95,16 @@ class ProjectTests(unittest.TestCase):
                         confidence=0.6,
                         job_id=None,
                     )
+                self.assertEqual(db.live_hosts(engagement), [])
+                db.add_event(
+                    engagement,
+                    source="httpx",
+                    kind="http_snapshot",
+                    subject="https://live.northwind.test/",
+                    value="200",
+                    confidence=0.85,
+                    job_id=None,
+                )
                 retired = db.mark_hosts_inactive(engagement, ["dead.northwind.test"])
                 self.assertEqual(retired, 1)
                 self.assertEqual(db.in_scope_hosts(engagement), ["dead.northwind.test", "live.northwind.test"])
@@ -182,11 +192,12 @@ class ProjectTests(unittest.TestCase):
                 self.assertIn("hosts.txt", status["files"])
                 case = json.load(urllib.request.urlopen(base + "/api/projects/northwind/files/case.json"))
                 self.assertEqual(case["engagement"]["name"], "Northwind")
-                hosts = urllib.request.urlopen(base + "/api/projects/northwind/files/hosts.txt").read().decode()
-                self.assertIn("app.northwind.test", hosts)
+                names = [row["normalized"] for row in case["assets"]]
+                self.assertIn("app.northwind.test", names)
                 bootstrap = json.load(urllib.request.urlopen(base + "/api/projects/northwind/bootstrap"))
                 self.assertEqual(bootstrap["project"]["slug"], "northwind")
-                self.assertGreaterEqual(bootstrap["summary"]["assets"], 1)
+                self.assertGreaterEqual(bootstrap["summary"]["in_scope_hosts"], 1)
+                self.assertEqual(bootstrap["summary"]["live_hosts"], 0)
             finally:
                 server.shutdown()
                 server.server_close()
