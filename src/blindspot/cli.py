@@ -167,7 +167,7 @@ def cmd_query(args: argparse.Namespace) -> int:
         elif args.kind == "parameters":
             print(f"{row['location']}\t{row['name']}\t{row['host']}{row['templated_path']}")
         elif args.kind == "queue":
-            print(f"{row['priority']}\t{row['status']}\t{row['category']}\t{row['title']}")
+            print(f"{row['priority']}\t{row.get('confidence_band') or ''}\t{row['status']}\t{row['category']}\t{row['title']}")
         elif args.kind == "changes":
             print(f"{row['change_type']}\t{row['subject']}\t{row['after_value']}")
         elif args.kind == "relationships":

@@ -125,7 +125,24 @@ def _markdown(payload: dict) -> str:
         lines.append("")
         lines.append(row["summary"])
         lines.append("")
-        lines.append(f"Status: {row['status']}. Confidence: {row['confidence']}.")
+        band = row.get("confidence_band") or "supported"
+        lines.append(f"Status: {row['status']}. Band: {band}. Confidence: {row['confidence']}.")
+        if row.get("rationale"):
+            lines.append("")
+            lines.append(f"Why: {row['rationale']}")
+        if row.get("limitations"):
+            lines.append("")
+            lines.append(f"Limitations: {row['limitations']}")
+        if row.get("validation_steps"):
+            lines.append("")
+            lines.append(f"Manual review: {row['validation_steps']}")
+        observations = row.get("observations") or []
+        if observations:
+            lines.append("")
+            lines.append("Evidence:")
+            for item in observations[:8]:
+                marker = f"#{item['event_id']} " if item.get("event_id") else ""
+                lines.append(f"- {marker}{item.get('kind', '')} {item.get('value', '')}".rstrip())
         lines.append("")
     lines.extend(["## Changes", ""])
     if not payload["changes"]:

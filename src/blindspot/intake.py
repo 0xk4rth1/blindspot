@@ -17,6 +17,7 @@ class Intake:
         self.url_count = 0
         self.dropped = 0
         self.stored = 0
+        self.auditor = None
         self._seen_urls: set[str] = set()
 
     def host(
@@ -88,6 +89,8 @@ class Intake:
     ) -> str:
         if not is_http_url(url) or not self.scope.allows_url(url):
             self.dropped += 1
+            if self.auditor is not None and url:
+                self.auditor.reject(url, "URL is out of scope")
             return ""
         cleaned = strip_url(url)
         if cleaned not in self._seen_urls and len(self._seen_urls) >= self.max_urls:
@@ -155,6 +158,8 @@ class Intake:
         if kind in {"historical_url", "js_endpoint", "crawl_url", "script_url", "spec_url"} and is_http_url(value):
             if not self.scope.allows_url(value):
                 self.dropped += 1
+                if self.auditor is not None:
+                    self.auditor.reject(value, "URL is out of scope")
                 return False
         inserted = self.db.add_event(
             self.engagement_id,

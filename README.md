@@ -13,13 +13,13 @@ The case file is the thing you reuse. Query it, export lane files, or open the l
 - A bounded same-origin crawl from Katana or the built-in crawler
 - JavaScript endpoints, parameter names, feature-flag names, and source-map paths
 - OpenAPI and Swagger operations from a fixed set of spec documents and from links the crawl already found
-- Review prompts with priority, confidence, and evidence
+- Review prompts that name the hypothesis, the assets and endpoints involved, the original observations, why the lead was kept, its confidence and limitations, and a high-level manual check
 
 ## What it does not do
 
 Blindspot does not ship exploit payloads, brute-force wordlists, or vulnerability checks. Amass is passive only, and brute-force tool flags are stripped. Cloud metadata addresses are refused. Cookie values, query values, hidden field values, raw secrets, and source-map file contents are not stored. Out-of-scope names returned by a tool are dropped. External names found in SPF or script tags are recorded as relationships and are not scanned.
 
-Review prompts are leads. They are not confirmed findings. You decide what to test by hand.
+Review prompts are leads. They are not confirmed findings. You decide what to test by hand. The intelligence layer is meant to make those leads fewer and more specific: related routes stay together, a script's endpoints stay together, and a lead that is no longer supported leaves the queue.
 
 ## Install
 
@@ -58,9 +58,11 @@ python -m blindspot serve --config blindspot.yaml
 
 Includes are OR. Excludes veto. `*.example.com` includes the apex and every subdomain. A URL prefix such as `https://api.example.com/v1` allows only that prefix, not the rest of the host and not another port. URL prefixes do not cause subdomain enumeration of the parent zone.
 
+Scope is checked again at the network boundary. Redirect destinations are revalidated. A CNAME or address that points outside scope, including a cloud metadata address, is not requested. Provider calls use the configured origins only. Historical URLs cannot skip the scope check. With `network.enabled: false`, the HTTP client does not call its transport. Allowed and rejected requests are written to `request_log`.
+
 ## Case layout
 
-SQLite tables keep assets, append-only events, surface URLs, endpoints, parameters, technologies, relationships, changes, and hypotheses. A reviewer can mark a hypothesis accepted, done, dismissed, or queued. Later runs refresh priority and evidence and leave that status alone.
+SQLite tables keep assets, append-only events, surface URLs, endpoints, parameters, technologies, relationships, changes, hypotheses, and the request log. A reviewer can mark a hypothesis accepted, done, dismissed, or queued. Later runs refresh priority and evidence and leave that status alone. A queued lead that the current run no longer emits is marked superseded.
 
 `blindspot report` writes:
 

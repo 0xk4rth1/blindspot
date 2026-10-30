@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from blindspot.adapters.external import ToolRunner, default_tool_runner
 from blindspot.config import AppConfig
 from blindspot.db import Database
+from blindspot.gate import RequestAudit, alias_block_reason
 from blindspot.http_client import ProviderHttp, TargetHttp, provider_origins
 from blindspot.http_client import Transport
 from blindspot.intake import Intake
@@ -98,6 +99,13 @@ async def execute(
         job_id = db.create_job(engagement_id, [stage.name for stage in selected])
         db.apply_scope(engagement_id, scope, job_id)
         intake = Intake(db, scope, engagement_id, job_id, config.limits.max_urls)
+        audit = RequestAudit(db, engagement_id, job_id)
+        intake.auditor = audit
+
+        def guard(url: str) -> str:
+            host = host_from_url(url)
+            return alias_block_reason(scope, host, db.list_relationships(engagement_id))
+
         _seed(intake, config.seeds)
         log = RunLog(db, job_id)
         provider_cap = max(config.limits.max_body_bytes, 2_000_000)
@@ -115,6 +123,8 @@ async def execute(
                 max_bytes=config.limits.max_body_bytes,
                 network_enabled=config.network.enabled,
                 transport=transport,
+                guard=guard,
+                auditor=audit,
             ),
             provider_http=ProviderHttp(
                 provider_origins(
@@ -129,6 +139,7 @@ async def execute(
                 max_bytes=provider_cap,
                 network_enabled=config.network.enabled,
                 transport=transport,
+                auditor=audit,
             ),
             log=log,
             tool_runner=tool_runner or default_tool_runner,
@@ -141,6 +152,7 @@ async def execute(
         # and the fixture's cdx-api uses that same host.
         results: list[dict] = []
         for stage in selected:
+            audit.stage = stage.name
             log.info(f"stage start {stage.name}")
             try:
                 result: StageResult = await stage.execute(ctx)
@@ -205,7 +217,7 @@ def _notify(db: Database, config: AppConfig, engagement_id: int, job_id: int) ->
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload) + "\n")
     webhook = config.notify.webhook.strip()
-    if not webhook:
+    if not webhook or not config.network.enabled:
         return
     _post_webhook(webhook, payload)
 

@@ -46,6 +46,9 @@ th { color: var(--muted); font-family: "Segoe UI", sans-serif; }
 .queue { display: grid; gap: 10px; }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
 .note { color: var(--muted); max-width: 78ch; }
+.queue .card strong { font-size: 16px; }
+.queue ul { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
+.queue li { margin: 4px 0; }
 </style>
 </head>
 <body>
@@ -173,7 +176,9 @@ function queue() {
   intro.className = "note";
   intro.textContent = "These prompts cite evidence already in the case. Manual verification stays the authority.";
   wrap.append(intro);
-  const rows = data.hypotheses.filter((row) => matches([row.title, row.category, row.summary, row.status, row.subject]));
+  const rows = data.hypotheses.filter((row) => row.status !== "superseded" && matches([
+    row.title, row.category, row.summary, row.status, row.subject, row.confidence_band, row.rationale
+  ]));
   if (!rows.length) {
     const empty = document.createElement("p");
     empty.textContent = "No matching review prompts.";
@@ -187,10 +192,28 @@ function queue() {
     title.textContent = row.priority + " · " + row.title;
     const meta = document.createElement("div");
     meta.className = "muted";
-    meta.textContent = row.category + " · " + row.status + " · confidence " + row.confidence;
+    meta.textContent = [row.confidence_band, row.category, row.status, "confidence " + row.confidence].filter(Boolean).join(" · ");
     const body = document.createElement("p");
     body.textContent = row.summary;
     card.append(title, meta, body);
+    addLine(card, "Why", row.rationale);
+    addLine(card, "Limitations", row.limitations);
+    addLine(card, "Manual review", row.validation_steps);
+    const related = (row.endpoints || []).slice(0, 8);
+    if (related.length) addLine(card, "Related", related.join(", "));
+    const observations = row.observations || [];
+    if (observations.length) {
+      const list = document.createElement("ul");
+      for (const item of observations.slice(0, 8)) {
+        const li = document.createElement("li");
+        const bits = [];
+        if (item.event_id) bits.push("#" + item.event_id);
+        bits.push(item.kind, item.source, item.value);
+        li.textContent = bits.filter(Boolean).join(" · ");
+        list.append(li);
+      }
+      card.append(list);
+    }
     if (live) {
       const actions = document.createElement("div");
       actions.className = "actions";
@@ -206,6 +229,15 @@ function queue() {
     wrap.append(card);
   }
   return wrap;
+}
+
+function addLine(card, label, value) {
+  if (!value) return;
+  const line = document.createElement("p");
+  const name = document.createElement("strong");
+  name.textContent = label + " ";
+  line.append(name, document.createTextNode(value));
+  card.append(line);
 }
 
 function grid(headers, rows) {

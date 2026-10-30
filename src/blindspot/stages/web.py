@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from urllib.parse import urljoin
 
 from blindspot.adapters.external import extra_args, parse_httpx, parse_url_lines, tool_path
+from blindspot.gate import evaluate_redirect
 from blindspot.normalize import host_from_url, join_origin, origin_of, with_query
 from blindspot.parsekit import (
     cookie_flags,
@@ -17,7 +17,7 @@ from blindspot.parsekit import (
     parse_security_txt,
     parse_sitemap,
 )
-from blindspot.safety import PolicyError
+from blindspot.safety import PolicyError, is_blocked_target
 from blindspot.stages.passive import wayback_time
 from blindspot.stages.result import StageResult
 
@@ -290,7 +290,7 @@ async def record_response(ctx, url: str, source: str) -> tuple[int, list[str]]:
         result = await ctx.target_http.get(url)
     except PolicyError as exc:
         ctx.log.warning(str(exc))
-        return 0
+        return 0, []
     if result.error and result.status == 0:
         ctx.log.warning(f"{url} {result.error}")
         return 0, []
@@ -300,12 +300,14 @@ async def record_response(ctx, url: str, source: str) -> tuple[int, list[str]]:
     headers = result.header_map()
     location = headers.get("location", "")
     if location:
-        target = urljoin(url, location)
-        if ctx.scope.allows_url(target):
+        decision, target, reason = evaluate_redirect(ctx.scope, cleaned, location)
+        if decision == "allowed":
             ctx.intake.surface(target, source=source, confidence=0.6, evidence=f"redirect from {cleaned}")
-        else:
+        elif decision == "rejected":
+            if ctx.intake.auditor is not None:
+                ctx.intake.auditor.reject(target, reason)
             foreign = host_from_url(target)
-            if foreign:
+            if foreign and not is_blocked_target(foreign):
                 ctx.intake.external(host_from_url(cleaned), "redirect", foreign, source=source, evidence=target[:200])
     host = host_from_url(cleaned)
     header_subset = interesting_headers(headers)

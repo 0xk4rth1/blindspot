@@ -180,10 +180,15 @@ class CaseTests(unittest.TestCase):
                 meta={"method": "POST", "path": "/admin/export", "security": [], "parameters": []},
             )
             drafts = build_hypotheses(db, engagement)
-            categories = {item["category"] for item in drafts}
-            self.assertIn("unauthenticated_admin_spec", categories)
-            blob = str(drafts)
-            self.assertNotIn("payload", blob.lower())
+            lead = next(item for item in drafts if item["category"] == "unauthenticated_admin_spec")
+            self.assertEqual(lead["confidence_band"], "strong")
+            self.assertTrue(lead["rationale"])
+            self.assertTrue(lead["limitations"])
+            self.assertTrue(lead["validation_steps"])
+            self.assertEqual(lead["evidence"]["observations"][0]["event_id"], 1)
+            blob = str(drafts).lower()
+            self.assertNotIn("payload", blob)
+            self.assertNotIn("exploit", blob)
             db.close()
 
 

@@ -202,9 +202,21 @@ CREATE TABLE IF NOT EXISTS notifications (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS request_log (
+  id INTEGER PRIMARY KEY,
+  engagement_id INTEGER NOT NULL,
+  job_id INTEGER,
+  stage TEXT NOT NULL DEFAULT '',
+  url TEXT NOT NULL,
+  decision TEXT NOT NULL,
+  reason TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_events_kind ON events(engagement_id, kind);
 CREATE INDEX IF NOT EXISTS idx_assets_scope ON assets(engagement_id, in_scope);
 CREATE INDEX IF NOT EXISTS idx_changes_job ON changes(job_id);
+CREATE INDEX IF NOT EXISTS idx_request_log_job ON request_log(job_id, decision);
 """
 
 
@@ -220,7 +232,20 @@ class Database:
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
+        self._migrate()
         self._conn.commit()
+
+    def _migrate(self) -> None:
+        columns = {row[1] for row in self._conn.execute("PRAGMA table_info(hypotheses)")}
+        additions = {
+            "confidence_band": "TEXT NOT NULL DEFAULT 'supported'",
+            "rationale": "TEXT NOT NULL DEFAULT ''",
+            "limitations": "TEXT NOT NULL DEFAULT ''",
+            "validation_steps": "TEXT NOT NULL DEFAULT ''",
+        }
+        for name, declaration in additions.items():
+            if name not in columns:
+                self._conn.execute(f"ALTER TABLE hypotheses ADD COLUMN {name} {declaration}")
 
     def close(self) -> None:
         with self._lock:
@@ -693,7 +718,11 @@ class Database:
         summary: str,
         priority: int,
         confidence: float,
-        evidence: list[dict],
+        evidence: list | dict,
+        confidence_band: str = "supported",
+        rationale: str = "",
+        limitations: str = "",
+        validation_steps: str = "",
     ) -> int:
         now = utcnow()
         payload = json.dumps(evidence, sort_keys=True)
@@ -707,10 +736,23 @@ class Database:
                     """
                     UPDATE hypotheses
                     SET title = ?, summary = ?, priority = ?, confidence = ?,
-                        evidence_json = ?, last_seen = ?
+                        confidence_band = ?, rationale = ?, limitations = ?,
+                        validation_steps = ?, evidence_json = ?, last_seen = ?
                     WHERE id = ?
                     """,
-                    (title, summary, int(priority), float(confidence), payload, now, row["id"]),
+                    (
+                        title,
+                        summary,
+                        int(priority),
+                        float(confidence),
+                        confidence_band,
+                        rationale,
+                        limitations,
+                        validation_steps,
+                        payload,
+                        now,
+                        row["id"],
+                    ),
                 )
                 self._conn.commit()
                 return int(row["id"])
@@ -718,8 +760,9 @@ class Database:
                 """
                 INSERT INTO hypotheses(
                   engagement_id, dedupe_key, title, category, subject, summary,
-                  priority, confidence, status, evidence_json, first_seen, last_seen
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)
+                  priority, confidence, confidence_band, rationale, limitations,
+                  validation_steps, status, evidence_json, first_seen, last_seen
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)
                 """,
                 (
                     engagement_id,
@@ -730,6 +773,10 @@ class Database:
                     summary,
                     int(priority),
                     float(confidence),
+                    confidence_band,
+                    rationale,
+                    limitations,
+                    validation_steps,
                     payload,
                     now,
                     now,
@@ -737,6 +784,60 @@ class Database:
             )
             self._conn.commit()
             return int(cursor.lastrowid)
+
+    def retire_unmentioned(self, engagement_id: int, active_keys: set[str]) -> int:
+        """Hide queued leads that this run no longer supports. Reviewed statuses stay."""
+
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, dedupe_key FROM hypotheses WHERE engagement_id = ? AND status = 'queued'",
+                (engagement_id,),
+            ).fetchall()
+            retired = 0
+            for row in rows:
+                if row["dedupe_key"] in active_keys:
+                    continue
+                self._conn.execute(
+                    "UPDATE hypotheses SET status = 'superseded' WHERE id = ?",
+                    (row["id"],),
+                )
+                retired += 1
+            self._conn.commit()
+            return retired
+
+    def log_request(
+        self,
+        engagement_id: int,
+        job_id: int | None,
+        stage: str,
+        url: str,
+        decision: str,
+        reason: str = "",
+    ) -> None:
+        with self._lock:
+            self._conn.execute(
+                """
+                INSERT INTO request_log(engagement_id, job_id, stage, url, decision, reason, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (engagement_id, job_id, stage[:80], url[:1000], decision, reason[:300], utcnow()),
+            )
+            self._conn.commit()
+
+    def list_requests(self, engagement_id: int, decision: str | None = None) -> list[dict]:
+        if decision:
+            return self._query(
+                """
+                SELECT * FROM request_log
+                WHERE engagement_id = ? AND decision = ?
+                ORDER BY id
+                """,
+                (engagement_id, decision),
+            )
+        return self._query(
+            "SELECT * FROM request_log WHERE engagement_id = ? ORDER BY id",
+            (engagement_id,),
+        )
 
     def set_hypothesis_status(self, engagement_id: int, hypothesis_id: int, status: str) -> dict | None:
         if status not in {"queued", "accepted", "dismissed", "done"}:
@@ -931,7 +1032,18 @@ class Database:
             (engagement_id,),
         )
         for row in rows:
-            row["evidence"] = json.loads(row.pop("evidence_json") or "[]")
+            parsed = json.loads(row.pop("evidence_json") or "[]")
+            row["evidence"] = parsed
+            if isinstance(parsed, dict):
+                row["observations"] = parsed.get("observations") or []
+                row["endpoints"] = parsed.get("endpoints") or []
+                row["assets"] = parsed.get("assets") or []
+                row["rationale"] = row.get("rationale") or parsed.get("why_prioritized") or ""
+                row["limitations"] = row.get("limitations") or parsed.get("limitations") or ""
+            else:
+                row["observations"] = parsed if isinstance(parsed, list) else []
+                row["endpoints"] = []
+                row["assets"] = []
         return rows
 
     def list_events(self, engagement_id: int, kind: str | None = None, limit: int = 500) -> list[dict]:

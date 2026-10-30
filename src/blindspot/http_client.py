@@ -132,25 +132,40 @@ class TargetHttp:
         max_bytes: int,
         network_enabled: bool,
         transport: Transport | None = None,
+        guard: Callable[[str], str] | None = None,
+        auditor=None,
     ):
         self.scope = scope
         self.timeout = timeout
         self.max_bytes = max_bytes
         self.network_enabled = network_enabled
         self.transport = transport or urllib_transport
+        self.guard = guard
+        self.auditor = auditor
         self._pacer = _Pacer(delay_ms)
 
+    def _refuse(self, url: str, reason: str) -> None:
+        if self.auditor is not None:
+            self.auditor.reject(url, reason)
+        raise PolicyError(reason)
+
     async def request(self, url: str, *, method: str = "GET", headers: dict[str, str] | None = None) -> FetchResult:
+        if not self.network_enabled:
+            self._refuse(url, "network is disabled for this case")
         verb = method.upper()
         if verb not in ALLOWED_METHODS:
-            raise PolicyError(f"method not permitted: {verb}")
+            self._refuse(url, f"method not permitted: {verb}")
         host = host_from_url(url)
         if is_blocked_target(host):
-            raise PolicyError(f"blocked metadata address: {host}")
+            self._refuse(url, f"blocked metadata address: {host}")
         if not self.scope.allows_url(url):
-            raise PolicyError(f"out of scope: {url}")
-        if not self.network_enabled:
-            raise PolicyError("network is disabled for this case")
+            self._refuse(url, f"out of scope: {url}")
+        if self.guard is not None:
+            reason = self.guard(url)
+            if reason:
+                self._refuse(url, reason)
+        if self.auditor is not None:
+            self.auditor.allow(url)
         await self._pacer.wait()
         return await asyncio.to_thread(
             self.transport,
@@ -177,28 +192,37 @@ class ProviderHttp:
         max_bytes: int,
         network_enabled: bool,
         transport: Transport | None = None,
+        auditor=None,
     ):
         self.allowed_origins = {origin.rstrip("/") for origin in allowed_origins if origin}
         self.timeout = timeout
         self.max_bytes = max_bytes
         self.network_enabled = network_enabled
         self.transport = transport or urllib_transport
+        self.auditor = auditor
         self._pacer = _Pacer(delay_ms)
 
+    def _refuse(self, url: str, reason: str) -> None:
+        if self.auditor is not None:
+            self.auditor.reject(url, reason)
+        raise PolicyError(reason)
+
     async def get(self, url: str, *, headers: dict[str, str] | None = None) -> FetchResult:
+        if not self.network_enabled:
+            self._refuse(url, "network is disabled for this case")
         parts = urlsplit(url)
         host = normalize_host(parts.hostname or "")
         if parts.scheme not in {"http", "https"}:
-            raise PolicyError("provider URL must be http or https")
+            self._refuse(url, "provider URL must be http or https")
         if is_blocked_target(host):
-            raise PolicyError(f"blocked metadata address: {host}")
+            self._refuse(url, f"blocked metadata address: {host}")
         if parts.scheme == "http" and host not in {"127.0.0.1", "localhost", "::1"}:
-            raise PolicyError("plain HTTP providers are only allowed on loopback")
+            self._refuse(url, "plain HTTP providers are only allowed on loopback")
         origin = origin_of(url).rstrip("/")
         if origin not in self.allowed_origins:
-            raise PolicyError(f"provider origin is not allowlisted: {origin}")
-        if not self.network_enabled:
-            raise PolicyError("network is disabled for this case")
+            self._refuse(url, f"provider origin is not allowlisted: {origin}")
+        if self.auditor is not None:
+            self.auditor.allow(url)
         await self._pacer.wait()
         return await asyncio.to_thread(
             self.transport,
