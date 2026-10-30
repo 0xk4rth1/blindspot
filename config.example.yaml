@@ -1,0 +1,68 @@
+# Blindspot refuses to run until `authorization` is a real statement
+# and `scope.include` lists only assets you are allowed to test.
+
+engagement: example
+program: "Replace with the bug bounty program name"
+authorization: ""
+
+network:
+  enabled: true
+
+seeds:
+  - https://example.com
+
+scope:
+  include:
+    - example.com
+    - "*.example.com"
+  exclude: []
+
+limits:
+  concurrency: 5
+  request_delay_ms: 250
+  timeout_seconds: 20
+  tool_timeout_seconds: 90
+  max_body_bytes: 1000000
+  max_urls: 400
+  max_js_files: 15
+  max_historical: 200
+  crawl_depth: 2
+  crawl_pages: 25
+  spec_fetches: 8
+
+# External tools are optional. If a binary is missing, Blindspot keeps
+# going with the in-process collector for that stage.
+# Amass is passive-only. Brute-force and wordlist flags are stripped.
+tools:
+  subfinder:
+    enabled: true
+    path: subfinder
+  amass:
+    enabled: false
+    path: amass
+  dnsx:
+    enabled: true
+    path: dnsx
+  httpx:
+    enabled: true
+    path: httpx
+  katana:
+    enabled: true
+    path: katana
+  gau:
+    enabled: true
+    path: gau
+
+providers:
+  doh: https://cloudflare-dns.com/dns-query
+  crtsh: https://crt.sh/
+  wayback: https://web.archive.org/cdx/search/cdx
+  commoncrawl_collinfo: https://index.commoncrawl.org/collinfo.json
+  urlscan: https://urlscan.io/api/v1/search/
+
+notify:
+  webhook: ""
+
+output:
+  database: .blindspot/blindspot.sqlite
+  report_dir: .blindspot/reports
