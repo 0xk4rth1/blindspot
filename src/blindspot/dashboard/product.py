@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 import threading
 from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -206,21 +207,103 @@ def _home(projects: list[dict]) -> str:
 
 def _bootstrap(folder: Path, slug: str) -> dict:
     config = load_config(folder / "blindspot.yaml")
-    db = Database(config.database_path())
-    try:
-        engagement_id = db.ensure_engagement(config.engagement, config.program, config.authorization)
-        payload = case_payload(db, engagement_id)
-    finally:
-        db.close()
+    payload = _empty_payload(config)
+    database = config.database_path()
+    if database.is_file():
+        db = Database(database, readonly=True)
+        try:
+            engagement_id = db.find_engagement(config.engagement)
+            if engagement_id is not None:
+                payload = case_payload(db, engagement_id)
+        except sqlite3.OperationalError:
+            payload = _empty_payload(config)
+        finally:
+            db.close()
     payload["project"] = {"slug": slug, "files": available_exports(folder)}
     return payload
+
+
+def _empty_payload(config) -> dict:
+    return {
+        "engagement": {
+            "id": None,
+            "name": config.engagement,
+            "program": config.program,
+            "authorization": config.authorization,
+            "created_at": "",
+        },
+        "summary": {},
+        "assets": [],
+        "endpoints": [],
+        "parameters": [],
+        "relationships": [],
+        "technologies": [],
+        "surface": [],
+        "changes": [],
+        "hypotheses": [],
+        "jobs": [],
+        "logs": [],
+    }
 
 
 def _status(folder: Path, slug: str) -> dict:
     with _RUN_LOCK:
         state = dict(_RUNS.get(slug) or {"state": "idle", "error": ""})
     state["files"] = available_exports(folder)
+    stage, warning = job_progress(folder)
+    state["stage"] = stage if state["state"] == "running" else ""
+    state["warning"] = warning if state["state"] in {"running", "failed"} else ""
     return state
+
+
+def job_progress(folder: Path) -> tuple[str, str]:
+    """Return the open stage and the latest warning for the newest job."""
+
+    database = folder / "case.sqlite"
+    if not database.is_file():
+        return "", ""
+    import sqlite3
+
+    try:
+        connection = sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=5)
+        try:
+            rows = connection.execute(
+                """
+                SELECT level, message FROM job_logs
+                WHERE job_id = (SELECT id FROM jobs ORDER BY id DESC LIMIT 1)
+                ORDER BY id
+                """
+            ).fetchall()
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return "", ""
+    messages = [row[1] for row in rows]
+    warning = ""
+    for level, message in reversed(rows):
+        if level in {"warning", "error"}:
+            warning = explain_warning(message)
+            break
+    return active_stage(messages), warning
+
+
+def explain_warning(message: str) -> str:
+    lowered = message.lower()
+    if "certificate_verify_failed" in lowered and "not yet valid" in lowered:
+        return "The system clock looks wrong, so HTTPS calls to providers are failing. Correct the clock, then run again."
+    return message[:300]
+
+
+def active_stage(messages: list[str]) -> str:
+    current = ""
+    for message in messages:
+        if message.startswith("stage start "):
+            current = message.removeprefix("stage start ").split(" ", 1)[0]
+        elif message.startswith("stage done ") or (
+            message.startswith("stage ") and " failed:" in message
+        ):
+            current = ""
+    return current
 
 
 def _start(root: Path, slug: str) -> None:

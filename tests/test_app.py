@@ -1,4 +1,6 @@
+import asyncio
 import json
+import sys
 import threading
 import time
 import unittest
@@ -7,12 +9,57 @@ import urllib.request
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from blindspot.adapters.external import default_tool_runner
 from blindspot.config import ConfigError
-from blindspot.dashboard.product import AppServer
+from blindspot.dashboard.product import AppServer, active_stage, explain_warning
+from blindspot.db import Database
 from blindspot.projects import create_project
 
 
 class ProjectTests(unittest.TestCase):
+    def test_active_stage_follows_the_latest_open_stage(self) -> None:
+        messages = [
+            "stage start subfinder",
+            "stage done subfinder inserted=0 skipped=0",
+            "stage start dns_resolve",
+        ]
+        self.assertEqual(active_stage(messages), "dns_resolve")
+        messages.append("stage dns_resolve failed: timeout")
+        self.assertEqual(active_stage(messages), "")
+
+    def test_clock_warning_is_plain_language(self) -> None:
+        raw = "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate is not yet valid"
+        text = explain_warning(raw)
+        self.assertIn("system clock", text)
+        self.assertNotIn("CERTIFICATE_VERIFY_FAILED", text)
+
+    def test_timed_out_tool_keeps_what_it_printed(self) -> None:
+        code, stdout, stderr = asyncio.run(
+            default_tool_runner(
+                sys.executable,
+                ["-c", "print('kept.host', flush=True)\nimport time\ntime.sleep(30)"],
+                1,
+                None,
+            )
+        )
+        self.assertEqual(code, 124)
+        self.assertIn("kept.host", stdout)
+        self.assertIn("timed out", stderr)
+
+    def test_a_read_during_a_write_does_not_lock_the_case(self) -> None:
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "case.sqlite"
+            writer = Database(path)
+            writer.ensure_engagement("Northwind", "program", "Authorized fictional engagement")
+            writer._conn.execute("BEGIN IMMEDIATE")
+            reader = Database(path, readonly=True)
+            try:
+                self.assertEqual(reader.find_engagement("Northwind"), 1)
+                self.assertEqual(reader.summary(1)["assets"], 0)
+            finally:
+                reader.close()
+                writer._conn.rollback()
+                writer.close()
     def test_blank_authorization_and_out_of_scope_seed_are_refused(self) -> None:
         with TemporaryDirectory() as tmp:
             root = Path(tmp)

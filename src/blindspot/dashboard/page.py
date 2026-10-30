@@ -66,6 +66,7 @@ th { color: var(--muted); font-family: "Segoe UI", sans-serif; }
 <div id="runbar" class="toolbar" hidden>
   <button type="button" id="run">Run collection</button>
   <span id="runstate" class="muted"></span>
+  <span id="runnote" class="muted"></span>
 </div>
 <div id="files" class="toolbar" hidden></div>
 <nav id="tabs">
@@ -287,7 +288,14 @@ async function refreshRun() {
     return;
   }
   const label = document.getElementById("runstate");
-  label.textContent = status.state === "failed" ? status.state + ": " + (status.error || "") : status.state;
+  if (status.state === "failed") {
+    label.textContent = "failed: " + (status.error || "");
+  } else if (status.state === "running" && status.stage) {
+    label.textContent = "running · " + status.stage;
+  } else {
+    label.textContent = status.state;
+  }
+  document.getElementById("runnote").textContent = status.warning || "";
   const files = document.getElementById("files");
   files.hidden = false;
   files.replaceChildren();
@@ -297,13 +305,16 @@ async function refreshRun() {
     link.textContent = name;
     files.append(link);
   }
+  if (status.state === "running" || status.state === "completed") {
+    try {
+      data = await fetch("__API__/bootstrap").then((res) => res.json());
+      render();
+    } catch (error) {
+      // The case is busy. The next poll tries again.
+    }
+  }
   if (status.state === "running") {
     window.setTimeout(refreshRun, 2000);
-    return;
-  }
-  if (status.state === "completed") {
-    data = await fetch("__API__/bootstrap").then((res) => res.json());
-    render();
   }
 }
 

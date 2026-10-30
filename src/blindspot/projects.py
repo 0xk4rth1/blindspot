@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shutil
+import sqlite3
 from pathlib import Path
 
 import yaml
@@ -104,10 +105,13 @@ def describe(folder: Path) -> dict:
     summary = {"assets": 0, "endpoints": 0, "queued": 0}
     database = config.database_path()
     if database.is_file():
-        db = Database(database)
+        db = Database(database, readonly=True)
         try:
-            engagement_id = db.ensure_engagement(config.engagement, config.program, config.authorization)
-            summary = db.summary(engagement_id)
+            engagement_id = db.find_engagement(config.engagement)
+            if engagement_id is not None:
+                summary = db.summary(engagement_id)
+        except sqlite3.OperationalError:
+            summary = {"assets": 0, "endpoints": 0, "queued": 0}
         finally:
             db.close()
     return {

@@ -40,10 +40,16 @@ def safe_json(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=True).replace("<", "\\u003c")
 
 
-def export_case(config: AppConfig, directory: Path | None = None) -> Path:
-    db = Database(config.database_path())
+def export_case(config: AppConfig, directory: Path | None = None, *, create: bool = True) -> Path:
+    db = Database(config.database_path(), readonly=not create)
     try:
-        engagement_id = db.ensure_engagement(config.engagement, config.program, config.authorization)
+        engagement_id = db.find_engagement(config.engagement)
+        if engagement_id is None and create:
+            db.close()
+            db = Database(config.database_path())
+            engagement_id = db.ensure_engagement(config.engagement, config.program, config.authorization)
+        if engagement_id is None:
+            return directory or config.report_dir()
         payload = case_payload(db, engagement_id)
         events = db.list_events(engagement_id, limit=2000)
     finally:

@@ -39,18 +39,29 @@ class CrawlStage:
         if not ctx.config.network.enabled:
             return StageResult(self.name, note="network disabled")
         binary = tool_path(ctx.config.tools.katana)
-        if binary:
-            return await self._katana(ctx, binary)
-        return await self._builtin(ctx)
+        if not binary:
+            return await self._builtin(ctx)
+        katana = await self._katana(ctx, binary)
+        if "timed out" not in katana.note:
+            return katana
+        builtin = await self._builtin(ctx)
+        return StageResult(
+            self.name,
+            inserted=katana.inserted + builtin.inserted,
+            note="katana timed out; builtin crawl continued",
+        )
 
     async def _katana(self, ctx, binary: str) -> StageResult:
         inserted = 0
+        timed_out = False
         depth = str(ctx.config.limits.crawl_depth)
         for seed in ctx.scope.seed_urls(ctx.config.seeds):
             args = ["-u", seed, "-d", depth, "-silent", "-jc", *extra_args(ctx.config.tools.katana)]
             code, stdout, stderr = await ctx.tool_runner(
                 binary, args, ctx.config.limits.tool_timeout_seconds, None
             )
+            if code == 124:
+                timed_out = True
             if stderr.strip():
                 ctx.log.warning(stderr.strip()[:400])
             if code not in {0, 124} and not stdout.strip():
@@ -69,7 +80,8 @@ class CrawlStage:
                         confidence=0.7,
                         evidence="katana",
                     )
-        return StageResult(self.name, inserted=inserted, note="katana")
+        note = "katana timed out" if timed_out else "katana"
+        return StageResult(self.name, inserted=inserted, note=note)
 
     async def _builtin(self, ctx) -> StageResult:
         queue: deque[tuple[str, int]] = deque(

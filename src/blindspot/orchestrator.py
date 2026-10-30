@@ -159,19 +159,31 @@ async def execute(
             except Exception as exc:
                 log.error(f"stage {stage.name} failed: {exc}")
                 results.append({"name": stage.name, "error": str(exc)})
+                _publish(config)
                 continue
             log.info(
                 f"stage done {stage.name} inserted={result.inserted} skipped={result.skipped} {result.note}".rstrip()
             )
             results.append({"name": result.name, "inserted": result.inserted, "note": result.note})
+            _publish(config)
         _notify(db, config, engagement_id, job_id)
         db.finish_job(job_id, "completed", stats={"stages": results, "dropped": intake.dropped})
+        _publish(config)
         summary = db.summary(engagement_id)
         summary["job_id"] = job_id
         summary["stages"] = results
         return summary
     finally:
         db.close()
+
+
+def _publish(config: AppConfig) -> None:
+    try:
+        from blindspot.report.export import export_case
+
+        export_case(config, config.report_dir(), create=False)
+    except Exception as exc:
+        logger.warning("could not refresh export files: %s", exc)
 
 
 def _select(only: list[str] | None) -> list:

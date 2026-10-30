@@ -32,14 +32,46 @@ async def default_tool_runner(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    payload = stdin_text.encode("utf-8") if stdin_text is not None else None
+    if stdin_text is not None and process.stdin is not None:
+        process.stdin.write(stdin_text.encode("utf-8"))
+        process.stdin.close()
+    stdout_chunks: list[bytes] = []
+    stderr_chunks: list[bytes] = []
+
+    async def _drain(stream: asyncio.StreamReader | None, chunks: list[bytes]) -> None:
+        if stream is None:
+            return
+        while True:
+            block = await stream.read(65536)
+            if not block:
+                return
+            chunks.append(block)
+
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(payload), timeout=timeout)
+        await asyncio.wait_for(
+            asyncio.gather(
+                _drain(process.stdout, stdout_chunks),
+                _drain(process.stderr, stderr_chunks),
+                process.wait(),
+            ),
+            timeout=timeout,
+        )
     except TimeoutError:
         process.kill()
-        await process.communicate()
-        return 124, "", f"{binary} timed out after {timeout}s"
-    return process.returncode or 0, stdout.decode("utf-8", "replace"), stderr.decode("utf-8", "replace")
+        try:
+            await asyncio.wait_for(process.wait(), timeout=2)
+        except TimeoutError:
+            pass
+        notice = f"{binary} timed out after {timeout}s"
+        err = b"".join(stderr_chunks).decode("utf-8", "replace").strip()
+        if err:
+            notice = f"{notice}\n{err}"
+        return 124, b"".join(stdout_chunks).decode("utf-8", "replace"), notice
+    return (
+        process.returncode or 0,
+        b"".join(stdout_chunks).decode("utf-8", "replace"),
+        b"".join(stderr_chunks).decode("utf-8", "replace"),
+    )
 
 
 def extra_args(toggle: ToolToggle) -> list[str]:

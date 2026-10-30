@@ -225,12 +225,20 @@ def utcnow() -> str:
 
 
 class Database:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, *, readonly: bool = False):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
-        self._conn = sqlite3.connect(self.path, check_same_thread=False)
+        if readonly:
+            uri = self.path.resolve().as_uri() + "?mode=ro"
+            self._conn = sqlite3.connect(uri, uri=True, timeout=30, check_same_thread=False)
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA busy_timeout=30000")
+            return
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._conn.execute("PRAGMA busy_timeout=30000")
+        self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(SCHEMA)
         self._migrate()
         self._conn.commit()
@@ -271,6 +279,12 @@ class Database:
             )
             self._conn.commit()
             return int(cursor.lastrowid)
+
+    def find_engagement(self, name: str) -> int | None:
+        with self._lock:
+            row = self._conn.execute("SELECT id FROM engagements WHERE name = ?", (name,)).fetchone()
+            self._conn.rollback()
+        return int(row["id"]) if row else None
 
     def replace_scope(self, engagement_id: int, rules: list[ScopeRule]) -> None:
         with self._lock:
@@ -1088,6 +1102,7 @@ class Database:
         def count(sql: str) -> int:
             with self._lock:
                 row = self._conn.execute(sql, (engagement_id,)).fetchone()
+                self._conn.rollback()
             return int(row["n"])
 
         return {
@@ -1111,4 +1126,5 @@ class Database:
     def _query(self, sql: str, params: tuple) -> list[dict]:
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
+            self._conn.rollback()
         return [dict(row) for row in rows]
